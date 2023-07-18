@@ -1,0 +1,264 @@
+* letsplotdemo
+
+This is a minimal port (although with the foundations for
+a full wrapper) of the minimal path necessary to implement
+the [[https://github.com/alshan/lets-plot-mini-apps/blob/main/jvm-swing-batik-app/src/main/kotlin/Main.kt][lets-plot batik/swing mini app]] via interop from Clojure.
+
+I had the mistaken impression that interop would be trivial
+since these are both JVM languages.  It turns out that
+some of Kotlin's features and compilation strategies create
+a pretty confounding set of challenges (most of which
+are surmounted by macros and some manual conversions) in
+wrapping libraries like lets-plot.  I am uncertain if there
+is a simpler path to follow, due to ignorance of the library
+and of Kotlin in general (this was a first experience learning
+Kotlin in practice, primarily to wrap it...).
+
+I got there in the end though.  The resulting function
+letsplotdemo.core/show-them will render a resizeable
+Swing window using the seesaw library, whereupon we see
+two plots size by side.  They are defined using the lets-plot
+ggplot abstraction (which ported fairly directly to clojure,
+with some work) and rendered using the Batik svg renderer in
+a Swing panel.
+
+Of note, both plots despite being SVG are interactive and "live".
+So you can run the cursor over them to see different selections on
+the plots - that's pretty slick.
+
+When first rendering, there is no preferredSize set for the JFrame,
+so you may just get a compacted frame that you need to resize manually.
+
+The contents should try to resize to fit the window, which should
+show the plots.
+
+
+** Usage
+
+
+Get a repl going with `lein repl` then either
+   - `(require 'letsplotdemo.core)`
+   - `(letsplotdemo.core/show-them)
+
+or invoke the function from your favorite IDE.
+
+** The pain of kotlin interop from clojure
+
+Some notes for folk who may follow in my footsteps:
+
+*** Function Compilation Leads to Implicit Classes
+
+in kotlin, the function in org.jetbrains.letsPlot  `letsPlot` is
+defined in the file ggplot.kt....so this gets compiled into a
+static class with a member:
+
+org.jetbrains.letsPlot.GgplotKt/letsPlot
+
+*** Default Value Interop Pain, and Hidden Function Args...
+for some reason, the examples allow a single arity usage of `letsPlot`, with the
+second function parameter elided.
+
+If we look at the java method/constructor, we see it requires a function (what
+appears to be a hook that can modify the aesthetic mapping at construction
+timie). This function is required, except it's not used in any of the kotlin
+examples (not directly at least)...
+
+The interop version makes no allowances; a single arg function specifically a
+kotlin.jvm.functions.Function1 implementation has to be provided. Its purpose is
+unknown, but in practice it is applied to the aesthetics object prior to
+"sealing" [whatever that means].
+
+I assume this is to setup the aesthetics mapping somehow. Weird! For now we just
+treat it as an unimportant side effect (although it creeps in later when we
+define geoms, and we have to supply a mapping)...
+
+*** + Operator Overloading via Plus method
+Like ggplot, lets-plot uses + to compose additional features/layers on a plot object prior
+to rendering.  Kotlin allows this via custom implementations of the `plus` method.  In practice,
+we define a simple wrapper function `p+` to compose one or more features in the same way (albeit
+in a prefix notation vs the infix of Kotlin).
+
+*** Partially Applied Constructors / Default Values
+
+One huge headache was due to the existence of (primarily in geom definitions)
+class constructors with default values.  In Kotlin, the constructor is smart enough
+to tell which args have been supplied by name and fills in the rest. The java constructor
+expects all args all the time.  There are options to mediate this (somewhat) with compiler
+annotations to generate more constructor overloads, but since I am not recompiling the source,
+I opted to wrap this stuff using macros and some minimal manual intervention.
+
+If we have a class definition like:
+
+#+BEGIN_SRC kotlin
+class geomDensity(
+    data: Map<*, *>? = null,
+    stat: StatOptions = Stat.density(),
+    position: PosOptions = positionIdentity,
+    showLegend: Boolean = true,
+    sampling: SamplingOptions? = null,
+    tooltips: TooltipOptions? = null,
+    orientation: String? = null,
+    override val x: Number? = null,
+    override val y: Number? = null,
+    override val alpha: Number? = null,
+    override val color: Any? = null,
+    override val fill: Any? = null,
+    override val linetype: Any? = null,
+    override val size: Number? = null,
+    override val weight: Any? = null,
+    override val bw: Any? = null,
+    override val kernel: String? = null,
+    override val n: Int? = null,
+    override val trim: Boolean? = null,
+    override val adjust: Number? = null,
+    override val fullScanMax: Int? = null,
+    private val quantiles: List<Number>? = null,
+    private val quantileLines: Boolean? = null,
+    override val colorBy: String? = null,
+    override val fillBy: String? = null,
+    mapping: DensityMapping.() -> Unit = {}
+#+END_SRC
+
+we note there are a few members that are non-nullable, but are provided with default values.  Everything
+else defaults to null (which makes invoking the java constructor easy).
+
+The hard part is mapping the argument names to the positional args, and providing default values that
+are consistent with the class definition.  This is made doubly harder since reflection can tell us the
+types and order of the args, but not their names.
+
+So we are left scraping the source files of interest to derive the necessary information (this is done in
+letsplaydemo.signatures).  With a database of class -> {arg-name -> order} on hand, we can feed
+by-name arguments into our positional java constructor via interop trivially.
+
+To make this easier, we define a couple of macros that help import and wrap kotlin classes (specifically
+the various geom classes).
+
+`new-partial` is akin to `new`, but with a map of supplied parameters for the constructor.  Its job is
+to supply the arguments to the Kotlin class's Java constructor in the appropriate positions.
+
+`defpartial` is a macro-writing macro that leverages `new-partial` to enable us to define default values
+for class constructors, and yields a new macro (name supplied, but typically ->classname) that merges
+the default values with user supplied values for the constructor.  This allows us to minimally define
+partially applied class constructors and get around the opaque java constructor.
+
+For example, the prior class defintion can now be expressed as:
+
+#+BEGIN_SRC clojure
+(defpartial ->geomDensity  geomDensity
+  {stat           (Stat$density.)
+   position       positionIdentity
+   showLegend     true
+   mapping ignore})
+#+END_SRC
+
+Yielding a macro ->geomDensity that will take a map of values to apply to the constructor, merge that map onto the defaults from defPartial,
+and construct the Kotlin class via java interop correctly.
+
+We can then build a corresponding invocation of geomDensity we see in the Kotlin demo:
+
+#+BEGIN_SRC kotlin
+geomDensity(color = "dark-green",
+            fill = "green",
+            alpha = .3,
+            size = 2.0) { x = "x" }
+#+END_SRC
+
+#+BEGIN_SRC clojure
+  (->geomDensity {color "dark-green"
+                  fill  "green"
+                  alpha  0.3
+                  size   2.0
+                  mapping (kfn [obj] (with obj {x "x"}))})
+#+END_SRC
+
+I could not find any documentation on the class instantion semantics where a {} block follows the constructor in Kotlin.  After much digging, looking at
+decompiled class files, and reading, I figured that it was an implicit thread of the mapping function and a means to define an anonymous function with an
+implicit `this` context (or something similar to F# record syntax).
+
+For our interop, we explicitly supply our mapping as an additional parameter to the constructor, and override the default (which does nothing) to
+hook the aesthetic mapping and set the object's x field to "x" (the `with` macro).
+
+Putting it all together, assuming we have defpartials for the requisite classes, and we coerce the Kotlin classes and functions into
+internal classes where necessary, the transform is pretty close:
+
+#+BEGIN_SRC kotlin
+     val plots = mapOf(
+         "Density" to letsPlot(data) + geomDensity(
+             color = "dark-green",
+             fill = "green",
+             alpha = .3,
+             size = 2.0
+         ) { x = "x" },
+         "Count" to letsPlot(data) + geomHistogram(
+             color = "dark-green",
+             fill = "green",
+             alpha = .3,
+             size = 2.0
+         ) { x = "x" }
+#+END_SRC
+
+
+#+BEGIN_SRC clojure
+(def plots {"Density" (p+ (letsPlot data)
+                          (->geomDensity
+                           {color "dark-green"
+                            fill  "green"
+                            alpha  0.3
+                            size   2.0
+                            mapping (kfn [obj] (with obj {x "x"}))}))
+
+            "Count" (p+ (letsPlot data)
+                        (->geomHistogram
+                         {color "dark-green"
+                          fill  "green"
+                          alpha  0.3
+                          size   2.0
+                          mapping (kfn [obj] (with obj {x "x"}))}))})
+#+END_SRC
+
+
+*** Definitions spread all over
+It's hard to tell if function is actually a separate function (defined in a Kt class somewhere) or
+a member of an object (as with the MonolithicCommons class).
+
+*** Extension functions
+These (like toSpec) live in a separate file that must be referenced as a Kotlin class for interop.
+
+- org.jetbrains.letsPlot.intern.ToSpecConvertersKt/toSpec
+
+*** INSTANCE weirdness jetbrains.datalore.plot.MonolithicCommon
+Kotlin exposes what looks like a static class, but it's not.  If we look at the definition, it appears to
+be a class with methods (defined as funs).  The specific method/fun we want to access for the port
+is `processRawSpecs`, which by all indications takes 2 arguments (a spec and a boolean).
+
+When we examin it in Clojure via interop though, we see there is a `this` argument.
+
+It turns out, there's a static instance in INSTANCE, which is an invocation of the MonolithicCommon object.
+All the functions (methods) have an implicit first arg to this class that you have to pass.
+
+So instead of
+
+#+BEGIN_SRC clojure
+(MonolithicCommon/processRawSpecs the-spec true)
+#+END_SRC
+
+We have a method invoked on the static instance:
+#+BEGIN_SRC clojure
+(.processRawSpecs MonolithicCommon/INSTANCE the-spec true)
+#+END_SRC
+
+To be honest, I just lucked into that.  It wasn't clear from looking at the Kotlin implementation at all (to me at least).
+** License
+
+Copyright © 2023 joinr
+
+This program and the accompanying materials are made available under the
+terms of the Eclipse Public License 2.0 which is available at
+http://www.eclipse.org/legal/epl-2.0.
+
+This Source Code may also be made available under the following Secondary
+Licenses when the conditions for such availability set forth in the Eclipse
+Public License, v. 2.0 are satisfied: GNU General Public License as published by
+the Free Software Foundation, either version 2 of the License, or (at your
+option) any later version, with the GNU Classpath Exception which is available
+at https://www.gnu.org/software/classpath/license.html.
