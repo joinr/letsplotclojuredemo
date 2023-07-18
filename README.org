@@ -231,7 +231,7 @@ Kotlin exposes what looks like a static class, but it's not.  If we look at the 
 be a class with methods (defined as funs).  The specific method/fun we want to access for the port
 is `processRawSpecs`, which by all indications takes 2 arguments (a spec and a boolean).
 
-When we examin it in Clojure via interop though, we see there is a `this` argument.
+When we examine it in Clojure via interop though, we see there is a `this` argument.
 
 It turns out, there's a static instance in INSTANCE, which is an invocation of the MonolithicCommon object.
 All the functions (methods) have an implicit first arg to this class that you have to pass.
