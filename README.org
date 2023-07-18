@@ -37,9 +37,9 @@ show the plots.
 ** Usage
 
 
-Get a repl going with `lein repl` then either
-   - `(require 'letsplotdemo.core)`
-   - `(letsplotdemo.core/show-them)
+Get a repl going with ~lein repl~ then either
+   - (require 'letsplotdemo.core)
+   - (letsplotdemo.core/show-them)
 
 or invoke the function from your favorite IDE.
 
@@ -49,14 +49,14 @@ Some notes for folk who may follow in my footsteps:
 
 *** Function Compilation Leads to Implicit Classes
 
-in kotlin, the function in org.jetbrains.letsPlot  `letsPlot` is
+in kotlin, the function in org.jetbrains.letsPlot  ~letsPlot~ is
 defined in the file ggplot.kt....so this gets compiled into a
 static class with a member:
 
 org.jetbrains.letsPlot.GgplotKt/letsPlot
 
 *** Default Value Interop Pain, and Hidden Function Args...
-for some reason, the examples allow a single arity usage of `letsPlot`, with the
+for some reason, the examples allow a single arity usage of ~letsPlot~, with the
 second function parameter elided.
 
 If we look at the java method/constructor, we see it requires a function (what
@@ -73,9 +73,9 @@ I assume this is to setup the aesthetics mapping somehow. Weird! For now we just
 treat it as an unimportant side effect (although it creeps in later when we
 define geoms, and we have to supply a mapping)...
 
-*** + Operator Overloading via Plus method
-Like ggplot, lets-plot uses + to compose additional features/layers on a plot object prior
-to rendering.  Kotlin allows this via custom implementations of the `plus` method.  In practice,
+*** '+' Operator Overloading via Plus method
+Like ggplot, lets-plot uses ~+~ to compose additional features/layers on a plot object prior
+to rendering.  Kotlin allows this via custom implementations of the ~plus~ method.  In practice,
 we define a simple wrapper function `p+` to compose one or more features in the same way (albeit
 in a prefix notation vs the infix of Kotlin).
 
@@ -134,10 +134,10 @@ by-name arguments into our positional java constructor via interop trivially.
 To make this easier, we define a couple of macros that help import and wrap kotlin classes (specifically
 the various geom classes).
 
-`new-partial` is akin to `new`, but with a map of supplied parameters for the constructor.  Its job is
+~new-partial~ is akin to ~new~, but with a map of supplied parameters for the constructor.  Its job is
 to supply the arguments to the Kotlin class's Java constructor in the appropriate positions.
 
-`defpartial` is a macro-writing macro that leverages `new-partial` to enable us to define default values
+~defpartial~ is a macro-writing macro that leverages ~new-partial~ to enable us to define default values
 for class constructors, and yields a new macro (name supplied, but typically ->classname) that merges
 the default values with user supplied values for the constructor.  This allows us to minimally define
 partially applied class constructors and get around the opaque java constructor.
@@ -152,7 +152,7 @@ For example, the prior class defintion can now be expressed as:
    mapping ignore})
 #+END_SRC
 
-Yielding a macro ->geomDensity that will take a map of values to apply to the constructor, merge that map onto the defaults from defPartial,
+Yielding a macro ~->geomDensity~ that will take a map of values to apply to the constructor, merge that map onto the defaults from defPartial,
 and construct the Kotlin class via java interop correctly.
 
 We can then build a corresponding invocation of geomDensity we see in the Kotlin demo:
@@ -174,10 +174,10 @@ geomDensity(color = "dark-green",
 
 I could not find any documentation on the class instantion semantics where a {} block follows the constructor in Kotlin.  After much digging, looking at
 decompiled class files, and reading, I figured that it was an implicit thread of the mapping function and a means to define an anonymous function with an
-implicit `this` context (or something similar to F# record syntax).
+implicit ~this~ context (or something similar to F# record syntax).
 
 For our interop, we explicitly supply our mapping as an additional parameter to the constructor, and override the default (which does nothing) to
-hook the aesthetic mapping and set the object's x field to "x" (the `with` macro).
+hook the aesthetic mapping and set the object's x field to "x" (the ~with~ macro).
 
 Putting it all together, assuming we have defpartials for the requisite classes, and we coerce the Kotlin classes and functions into
 internal classes where necessary, the transform is pretty close:
@@ -223,16 +223,16 @@ It's hard to tell if function is actually a separate function (defined in a Kt c
 a member of an object (as with the MonolithicCommons class).
 
 *** Extension functions
-These (like toSpec) live in a separate file that must be referenced as a Kotlin class for interop.
+These (like ~toSpec~) live in a separate file that must be referenced as a Kotlin class for interop.
 
 - org.jetbrains.letsPlot.intern.ToSpecConvertersKt/toSpec
 
 *** INSTANCE weirdness jetbrains.datalore.plot.MonolithicCommon
 Kotlin exposes what looks like a static class, but it's not.  If we look at the definition, it appears to
 be a class with methods (defined as funs).  The specific method/fun we want to access for the port
-is `processRawSpecs`, which by all indications takes 2 arguments (a spec and a boolean).
+is ~processRawSpecs~, which by all indications takes 2 arguments (a spec and a boolean).
 
-When we examine it in Clojure via interop though, we see there is a `this` argument.
+When we examine it in Clojure via interop though, we see there is a ~this~ argument.
 
 It turns out, there's a static instance in INSTANCE, which is an invocation of the MonolithicCommon object.
 All the functions (methods) have an implicit first arg to this class that you have to pass.
