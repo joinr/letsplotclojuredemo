@@ -32,6 +32,7 @@ so you may just get a compacted frame that you need to resize manually.
 The contents should try to resize to fit the window, which should
 show the plots.
 
+[[lpclojure.jpg]]
 
 ** Usage
 
