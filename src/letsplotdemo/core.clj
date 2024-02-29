@@ -1,21 +1,17 @@
 (ns letsplotdemo.core
-  (:require [letsplotdemo.signatures :as sigs]
-            [seesaw.core :as gui])
-  (:import  [jetbrains.datalore.plot MonolithicCommon]
-            [jetbrains.datalore.vis.swing.batik DefaultPlotPanelBatik]
-            [org.jetbrains.letsPlot.geom geomDensity geomHistogram]
+  (:require [letsplotdemo.signatures :as sigs])
+  (:import  [org.jetbrains.letsPlot.geom geomDensity geomHistogram geomSegment]
             [org.jetbrains.letsPlot.intern Plot Feature #_toSpec]
             [org.jetbrains.letsPlot LetsPlot]
-            [java.awt Dimension GridLayout]
             [org.jetbrains.letsPlot Stat$density Stat$bin]
             [org.jetbrains.letsPlot.pos PosKt]
             [org.jetbrains.letsPlot GgplotKt]
             [org.jetbrains.letsPlot.intern.layer PosOptions]
-            [org.jetbrains.letsPlot.intern ToSpecConvertersKt]
             [javax.swing JPanel JFrame]))
 
 ;;package org.jetbrains.letsPlot.pos pos.kt
 (def positionIdentity (PosKt/getPositionIdentity))
+(def statIdentity     (.getIdentity org.jetbrains.letsPlot.Stat/INSTANCE))
 (defn positionDodge ^PosOptions [^Number width]
   (PosKt/positionDodge width))
 (defn positionDodgeV ^PosOptions [^Number height]
@@ -24,9 +20,6 @@
 (defn positionFill ^PosOptions [& [vjust mode]] (PosKt/positionFill vjust mode))
 (defn positionJitterDodge ^PosOptions [& [dodgeWidth jitterWith jitterHeight]]
   (PosKt/positionJitterDodge dodgeWidth jitterWith jitterHeight))
-
-;;will complain about reflection..
-(defn toSpec [obj] (ToSpecConvertersKt/toSpec obj))
 
 
 ;;in kotlin, the function in org.jetbrains.letsPlot letsPlot is
@@ -103,21 +96,61 @@
            `(~(symbol (str ".set" (clojure.string/capitalize (name fld))))
              ~v)))))
 
+(defn resolve-default [class]
+  (let [res  (or (ns-resolve *ns* class)
+                 (ns-resolve (find-ns 'letsplotdemo.core) class)
+                 (throw (ex-info "could not resolve class/alias in current ns or letsplotdemo.core" {:in class :ns *ns*})))]
+    (cond (class? res)
+          res
+          (var? res)
+          (let [m (meta res)]
+            (symbol (-> m :ns ns-name name) (-> m :name name)))
+          :else
+          res)))
+
 (defmacro new-partial [class kvps]
-  (let [fullclass  (ns-resolve *ns* class)
+  (let [fullclass  (resolve-default class)
         order  (or (get sigs/geom-args  (.getName ^Class fullclass))
                    (throw (ex-info "unknown kotlin class!" {:in class :name (name class)})))
         knowns (reduce-kv (fn [acc k init]
                             (let [idx (order (name k))]
                               (assoc acc idx init))) {} kvps)]
-    `(new ~class ~@(map knowns (range (count order))))))
+    `(new ~fullclass ~@(map knowns (range (count order))))))
 
 ;;define a partially applied kotlin class constructor lol.
+;;need to lift class ctors...
+
+(defn spop [s]
+  (subs s 0 (dec (count s))))
+
+;;allows us to invoke macros from other namespaces and get the
+;;alias ctor classess here.  We could also define a simple
+;;interpreter for the known classes too, like :stats/density ->
+;;Stats$density...TBD.
+
+(defn lift-symbols [m]
+  (reduce-kv (fn [acc k expr]
+               (cond
+                 (= expr 'ignore)
+                 acc
+
+                 (list? expr)
+                 (let [symb (first expr)]
+                   (if-let [cls (when (clojure.string/ends-with? (name symb) ".")
+                                  (-> symb name spop symbol))]
+                     (assoc acc k (cons (symbol (str (.getName ^Class (resolve-default cls)) ".")) (rest expr)))
+                     (assoc acc k (cons (resolve-default symb) (rest expr)))))
+
+                 (symbol? expr) ;;could be a class....
+                 (assoc acc k (resolve-default expr))
+                 :else
+                 acc)) m m))
+
 (defmacro defpartial [ctor class defaults]
   (let [kvps (gensym "kvps")
         merged (gensym "merged")]
     `(defmacro ~ctor [~kvps]
-       (let [~merged (merge  '~defaults ~kvps)]
+       (let [~merged (merge  (lift-symbols '~defaults) (lift-symbols ~kvps))]
          `(new-partial ~'~class ~~merged)))))
 
 ;;defines a kotlin class wrapper with defaulst values. we have to transcribe a
@@ -133,7 +166,7 @@
 
 ;;so something like
 (defpartial ->geomDensity  geomDensity
-  {stat           (Stat$density.)
+  {stat           (Stat$density.)  ;;need to infer Stat from letsplotcore.demo or current ns.
    position       positionIdentity
    showLegend     true
    mapping ignore})
@@ -145,139 +178,8 @@
    mapping ignore})
 
 
-;;Actual port of the example:
-
-;; fun main() {
-;;     val rand = java.util.Random()
-;;     val n = 200
-;;     val data = mapOf<String, Any>(
-;;         "x" to List(n) { rand.nextGaussian() }
-;;     )
-;;     val plots = mapOf(
-;;         "Density" to letsPlot(data) + geomDensity(
-;;             color = "dark-green",
-;;             fill = "green",
-;;             alpha = .3,
-;;             size = 2.0
-;;         ) { x = "x" },
-;;         "Count" to letsPlot(data) + geomHistogram(
-;;             color = "dark-green",
-;;             fill = "green",
-;;             alpha = .3,
-;;             size = 2.0
-;;         ) { x = "x" },
-;;         )
-
-
-(def ^java.util.Random randgen (java.util.Random.))
-(def n 200)
-(def data {"x" (vec (repeatedly n #(.nextGaussian randgen)))})
-
-
-(def plots {"Density" (p+ (letsPlot data)
-                          (->geomDensity
-                           {color "dark-green"
-                            fill  "green"
-                            alpha  0.3
-                            size   2.0
-                            mapping (kfn [obj] (with obj {x "x"}))}))
-
-            "Count" (p+ (letsPlot data)
-                        (->geomHistogram
-                         {color "dark-green"
-                          fill  "green"
-                          alpha  0.3
-                          size   2.0
-                          mapping (kfn [obj] (with obj {x "x"}))}))})
-
-;;ignoring most of the Swing csrap; it's awful in kotlin or java.
-
-;; fun createPlotPanel(): JPanel {
-;;                                val rawSpec = plots[plotKey]!!.toSpec()
-;;                                val processedSpec = MonolithicCommon.processRawSpecs(rawSpec, frontendOnly = false)
-
-;;                                return DefaultPlotPanelBatik(
-;;                                                             processedSpec = processedSpec,
-;;                                                             preserveAspectRatio = preserveAspectRadio,
-;;                                                             preferredSizeFromPlot = false,
-;;                                                             repaintDelay = 10,
-;;                                                             ) { messages ->
-;;                                                                for (message in messages) {
-;;                                                                                           println("[Example App] $message")
-;;                                                                                           }
-;;                                                                }
-
-;;WEIRD!
-;;kotlin exposes what looks like a static class, but it's not.  There's a static instance in INSTANCE,
-;;and all the functions (methods) have an implicit first arg to this class that you have to pass...wtf.
-(defn process-spec [raw-spec] (.processRawSpecs MonolithicCommon/INSTANCE raw-spec false))
-
-#_(@NotNull final Map<String, Object> processedSpec, final boolean preserveAspectRatio, final boolean preferredSizeFromPlot, final int repaintDelay, @NotNull final Function1<? super List<String>, Unit> computationMessagesHandler)
-
-(defn create-plot-panel ^JPanel [plot]
-  (let [spec (toSpec plot)
-        processed (process-spec spec)]
-    (DefaultPlotPanelBatik. processed true false 10 (kfn [messages] nil))))
-
-(gui/native!)
-(defn show-them []
-  (gui/invoke-later
-   (-> (gui/frame :title "Batik Rendering Let's Plot!" :content
-                  (gui/horizontal-panel :items [(create-plot-panel (plots "Density"))
-                                               (create-plot-panel (plots "Count"))]))
-       gui/pack!
-       gui/show!)))
-
-
-
-;;Ignored controll /swing crap.
-;; private class Controller(
-;;     private val plots: Map<String, Plot>,
-;;     initialPlotKey: String,
-;;     initialPreserveAspectRadio: Boolean
-;; ) {
-;;     var plotContainerPanel: JPanel? = null
-;;     var plotKey: String = initialPlotKey
-;;         set(value) {
-;;             field = value
-;;             rebuildPlotComponent()
-;;         }
-;;     var preserveAspectRadio: Boolean = initialPreserveAspectRadio
-;;         set(value) {
-;;             field = value
-;;             rebuildPlotComponent()
-;;         }
-
-;;     fun rebuildPlotComponent() {
-;;         plotContainerPanel?.let {
-;;             val container = plotContainerPanel!!
-;;             // cleanup
-;;             for (component in container.components) {
-;;                 if (component is Disposable) {
-;;                     component.dispose()
-;;                 }
-;;             }
-;;             container.removeAll()
-
-;;             // build
-;;             container.add(createPlotPanel())
-;;             container.revalidate()
-;;         }
-;;     }
-
-;;     fun createPlotPanel(): JPanel {
-;;         val rawSpec = plots[plotKey]!!.toSpec()
-;;         val processedSpec = MonolithicCommon.processRawSpecs(rawSpec, frontendOnly = false)
-
-;;         return DefaultPlotPanelBatik(
-;;             processedSpec = processedSpec,
-;;             preserveAspectRatio = preserveAspectRadio,
-;;             preferredSizeFromPlot = false,
-;;             repaintDelay = 10,
-;;         ) { messages ->
-;;             for (message in messages) {
-;;                 println("[Example App] $message")
-;;             }
-;;         }
-;;     }
-;; }
+(defpartial ->geomSegment geomSegment
+  {stat           statIdentity
+   position       positionIdentity
+   showLegend     true
+   mapping ignore})

@@ -6,4 +6,5 @@
   :dependencies [[org.clojure/clojure "1.11.1"]
                  [org.jetbrains.lets-plot/lets-plot-batik "3.2.0"]
                  [org.jetbrains.lets-plot/lets-plot-kotlin-jvm "4.4.1"]
+                 [scicloj/tablecloth "7.021"]
                  [seesaw/seesaw "1.5.0"]])
